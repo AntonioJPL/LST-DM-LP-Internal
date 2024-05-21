@@ -1,0 +1,12 @@
+#This is the MongoDB docker-compose file. This is implemented and can be used.
+version: '3.5'
+services:
+  dmmongo:
+    hostname: "DM-mongo"  # custom host name to use for the service container
+    container_name: "DM-mongodb" # specifies a custom container name
+    image: "mongo:4.2.1-bionic"  # image to start the container from. Same as TCU.
+    restart: unless-stopped  # restarts a container irrespective of the exit code but will stop restarting when the service is stopped or removed
+    ports:  # Exposes container ports: host IP, host port and container port
+      - '27005:27017'
+    volumes:  # mount host paths or named volumes that MUST be accessible by service containers
+      - ./mongodb:/data/db
