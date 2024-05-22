@@ -2,8 +2,8 @@ import numpy as np
 from datetime import datetime,timedelta,date,timedelta
 import time as time
 from time import strftime
-import os
-from os import path
+import os, sys
+import json
 import pytz
 #from datetime import timezone
 from operator import itemgetter
@@ -501,34 +501,20 @@ def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0
     storeLogsAndOperation(generallogsorted)
     print(len(operationTimes))
     if len(operationTimes) > 0:
-        if len(parkoutbeg) != 0 or len(parkinbeg) != 0 or len(gotobeg) != 0 or len(trackbeg) != 0:
-            dirParts = dirname.split("/")
-            if path.exists(dirname.replace("/"+dirParts[-1], "")) == False:
-                os.mkdir(dirname.replace("/"+dirParts[-1], ""))
-            if path.exists(dirname)==False :
-                os.mkdir(dirname)
         if len(trackbeg) != 0:
-            if path.exists(dirname+"/Track")==False :
-                    os.mkdir(dirname+"/Track")
             print("====== Track =======")
             selectedType = "1"
             checkDatev2(trackcmd,trackbeg,trackend,trackerror,generalstop,track,None,filename2,filename3,filename4,filename5,dirname+"/Track"+"/Track",generalTypes[selectedType],0,"Tracking",lastone,azparam,azparamline,elparam,elparamline,ra,dec)
         if lastone ==0 :
             if len(parkoutbeg) != 0:
-                if path.exists(dirname+"/Parkout")==False :
-                        os.mkdir(dirname+"/Parkout")
                 print("====== Parkout =======")
                 selectedType = "2"
                 checkDatev2(parkoutcmd,parkoutbeg,parkoutend,parkouterror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/Parkout"+"/Parkout",generalTypes[selectedType],0,"ParkOut")
             if len(parkinbeg) != 0:
-                if path.exists(dirname+"/Parkin")==False :
-                        os.mkdir(dirname+"/Parkin")
                 print("====== Parkin =======")
                 selectedType = "3"
                 checkDatev2(parkincmd,parkinbeg,parkinend,parkinerror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/Parkin"+"/Parkin",generalTypes[selectedType],1,"ParkIn")
             if len(gotobeg) != 0:
-                if path.exists(dirname+"/GoToPos")==False :
-                        os.mkdir(dirname+"/GoToPos")
                 print("====== GoToPos =======")
                 selectedType = "4"
                 checkDatev2(gotocmd,gotobeg,gotoend,gotoerror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/GoToPos"+"/GoToPos",generalTypes[selectedType],0,"GoToPsition")
@@ -537,7 +523,7 @@ def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0
     getLoadPin(filename3)
     try: 
         if firstData is not None:
-            req = requests.post("http://127.0.0.1:8000/storage/plotGeneration", json=[[firstData]])
+            req = requests.post("http://192.168.0.15:8086/storage/plotGeneration", json=[[firstData]])
     except Exception as e:
         print("Plot was not generated because there is no conection to Django or there was a problem: "+str(e))
     print("END TIME")
@@ -550,18 +536,15 @@ async def runFile(date):
 #Function to check if the plots are generated for the last 7 days
 def checkPlots(dirname, filename, date):
     try:
-        last7Operations = MongoDb.getLast7Operations(MongoDb)
-        dashedDate = date
-        i = 0
-        try: 
-            while i < len(last7Operations):
-                operation = last7Operations[i]
-                generalDir = dirname.replace(dashedDate, operation["Date"])
-                directories = os.listdir(generalDir)
-                if len(os.listdir(generalDir+"/"+directories[0])) == 0:
-                    requests.post("http://127.0.0.1:8000/storage/plotGeneration", json=[[operation["Tmin"]]])
-                i += 1
-        except Exception as e:
-            print("Plot was not generated. Error: "+str(e))
+        res = requests.post("http://192.168.0.15:8086/storage/checkPlots", json={"date": date, "dirname": dirname})
+        json_data = json.loads(res.text)
+        parsedResponse = json_data["data"]
+        if parsedResponse:
+            print("All the plots where checked and generated")
+        else:
+            if parsedResponse == False:
+                print("There where days missing")
+            else:
+                print(parsedResponse)
     except Exception as e:
         print("There was an error or all the plots are already generated: "+str(e))

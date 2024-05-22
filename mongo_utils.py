@@ -146,9 +146,6 @@ class MongoDb:
         except Exception as e:
             #print("error: "+str(e))
             pass
-    #Function that returns the las 7 operation stored in the DB, this is used to check if the plots are generated on the LibDisplayTrackStore.py file
-    def getLast7Operations(self):
-        return list(self.dbname["Operations"].aggregate([{"$sort": {"Date": -1}}, {"$limit": 7}]))
     #Function that checks if the date passed is equal to the last date stored, in case it is it returns true, in case the database has no operations it returns Empty and in case the date is not equal it returns the last date stored, if there is an error it returns False. All of this is returned in an object with a "lastDate" attribute
     def checkDates(self, date):
         try:

@@ -33,6 +33,8 @@ ListRunFromDriveLogDate.py
 *.txt
 cmd.*
 
+!requirements.txt
+
 mongodb
 
 
