@@ -209,7 +209,7 @@ def getTrackNew(filename3,tmin,tmax):
         rows["Tth"] = str(rows["Tth"].timestamp()).replace(".", "")
         rows["Tth"] = int(rows["Tth"].ljust(2+len(rows["Tth"]), '0'))
     MongoDb.storeTrack(MongoDb, df_dict)
-##### READ LOAD PIN
+#Function that stores all the loadpins into mongodb
 def getLoadPin(filename2):
     print("getLoadPin %s"%(filename2))
     t0=0
@@ -235,7 +235,7 @@ def getLoadPin(filename2):
     print("Storing the data")
     print(values)
     MongoDb.storeLoadPin(MongoDb, pins)
-#Used in checkDatev2
+#Used in checkDatev2. Recieves the data from checkdate function, parses it once more and then stores this data into mongodb
 def GenerateFig(filename,filename2,filename3,filename4,tmin,tmax,cmd_status,ttrack,figname="",type=None,addtext='',ra=None,dec=None):
     print("GenerateFig %s %s %s %s %s %s %s "%(filename,filename2,filename3,tmin,tmax,ttrack,figname))
     #Position log.
@@ -265,7 +265,7 @@ def getRegulParameters(param,paramline,begtrack):
             break            
     print("paramout %s"%(paramout))
     return paramout
-#Used in GetAllDate function
+#Used in GetAllDate function. Parses the data and calls the function to store the data in mongodb
 def checkDatev2(cmd,beg,end,error,stop,track,repos,filename,filename2,filename3,filename4,figname,type,zoom=0,action="",lastone=0,azparam=None,azparamline=None,elparam=None,elparamline=None,ra=None,dec=None):
     beg_ok=[]
     end_ok=[]
@@ -424,7 +424,7 @@ def storeLogsAndOperation(logsorted):
             operationTimes.append(operationTmax)
     except Exception as e:
         print("Logs could not be stored: "+str(e))
-#Function that recieves all the Log File names and 
+#Function that recieves all the Log File names and calls other functions to store the data and generate the interactive plots
 def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0):
     dirname = "./DriveMonitoringApp/DataStorage/static/html/Log_" + filename
     if len(MongoDb.dbname.list_collection_names()) == 0:

@@ -435,7 +435,7 @@ def storeLogsAndOperation(logsorted):
             operationTimes.append(operationTmax)
     except Exception as e:
         print("Logs could not be stored: "+str(e))
-#Function that recieves all the Log File names and 
+#Function that recieves all the Log File names and calls other functions to store the data and generate the interactive plots
 def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0):
     dirname = "./DriveMonitoringApp/DataStorage/static/html/Log_" + filename
     print("This is the Hot plots script running for the date: "+date)
