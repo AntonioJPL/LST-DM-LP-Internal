@@ -12,6 +12,7 @@ import numpy as np
 import requests
 import asyncio
 from mongo_utils import MongoDb
+from IP_Info import IP
 #General
 operationTimes = []
 generallog = []
@@ -523,7 +524,7 @@ def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0
     getLoadPin(filename3)
     try: 
         if firstData is not None:
-            req = requests.post("http://192.168.0.15:8086/storage/plotGeneration", json=[[firstData]])
+            req = requests.post(IP+"storage/plotGeneration", json=[[firstData]])
     except Exception as e:
         print("Plot was not generated because there is no conection to Django or there was a problem: "+str(e))
     print("END TIME")
@@ -536,7 +537,7 @@ async def runFile(date):
 #Function to check if the plots are generated for the last 7 days
 def checkPlots(dirname, filename, date):
     try:
-        res = requests.post("http://192.168.0.15:8086/storage/checkPlots", json={"date": date, "dirname": dirname})
+        res = requests.post(IP+"storage/checkPlots", json={"date": date, "dirname": dirname})
         json_data = json.loads(res.text)
         parsedResponse = json_data["data"]
         if parsedResponse:
