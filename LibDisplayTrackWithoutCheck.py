@@ -1,30 +1,26 @@
-import numpy as np
-from numpy import fft
-import matplotlib as mpl
-mpl.use('Agg')
-import matplotlib.pyplot as plt
-import math
-from math import log
 from datetime import datetime,timedelta,date,timedelta
 import time as time
-from time import gmtime, strftime
-import os, sys, getopt
-from os import path
+from time import strftime
+import os, sys
+import json
 import pytz
 #from datetime import timezone
-import matplotlib.dates as mdates
-from matplotlib import gridspec
 from operator import itemgetter
-import astropy.units as u
-from astropy.time import Time
-from astropy.coordinates import SkyCoord, EarthLocation, AltAz, solar_system_ephemeris,ICRS
 import pandas as pd
 import numpy as np
 import requests
 import asyncio
 from mongo_utils import MongoDb
-from IP_Info import IP
+#from IP_Info import IP
+from dotenv import load_dotenv
+from pytz import UTC
+from scipy.optimize import curve_fit
+
+
 #General
+load_dotenv()  # take environment variables from .env
+
+IP = os.environ.get('EXT_SERVER_IP')
 operationTimes = []
 generallog = []
 generalData = []
@@ -436,9 +432,200 @@ def storeLogsAndOperation(logsorted):
             operationTimes.append(operationTmax)
     except Exception as e:
         print("Logs could not be stored: "+str(e))
+#Function that stores the Damage
+def calculateDamage(date):
+    try:
+        # --- S-N Curve Configuration (Stress-Number of Cycles) ---
+        # Define known stress points and corresponding number of cycles to failure
+        stress = np.array([292, 136, 63, 50, 37, 32, 20]) # Stress values in MPa
+        cycles = np.array([1e4, 1e5, 1e6, 2e6, 5e6, 1e7, 1e8]) # Number of cycles
+
+        # Define the S-N curve function (Basquin's equation form)
+        def sn_curve(N, a, b):
+            """
+            Calculates stress (S) given number of cycles (N) based on S = a * N^(-b).
+            Clips N to avoid issues with very low or very high cycle counts.
+            """
+            N = np.clip(N, 1e3, 1e12) # Clip N to a practical range
+            return a * N**(-b)
+
+        # Fit the S-N curve function to the experimental data to find parameters 'a' and 'b'
+        params, _ = curve_fit(sn_curve, cycles, stress)
+        a, b = params # Unpack the fitted parameters
+        # Define helper functions based on the fitted S-N curve
+        def estimate_cycles(stress_input):
+            """Estimates the number of cycles to failure for a given stress input."""
+            return (stress_input / a) ** (-1 / b)
+        print("Calculating Damages...")
+        # Prepare data for plotting and analysis
+        datetime_objects = [datetime.fromtimestamp(item['T'] / 1000, tz=UTC) for item in dailyPosition] # Convert timestamps to datetime objects
+        za_values = [item['ZA'] for item in dailyPosition] # Extract Zenith Angle values
+        conversion = pd.read_csv('/opt/lst-drive/src/LST-DM-LP-Internal/deg_to_stress.csv')
+        # --- Abrupt Movement Identification Logic ---
+        # Initialize variables for detecting significant changes (cycles) in Zenith Angle
+        abrupt_movements = [] # List to store identified abrupt movements
+        prev_value = None # Stores the previous data point {ZA, T}
+        # Variables for identifying start and end points of a potential cycle
+        start_down_value = None # Marks the start of a downward ZA trend (potential cycle start)
+        start_up_value = None   # Marks the start of an upward ZA trend (potential cycle end)
+        deepest_point = None    # Tracks the minimum ZA value in the current segment
+        deepest_time = None     # Timestamp of the deepest_point
+        highest_point = None    # Tracks the maximum ZA value in the current segment
+        highest_time = None     # Timestamp of the highest_point
+        # Candidate points for cycle boundaries, refined as data is processed
+        start_down_candidate = None
+        start_up_candidate = None
+
+        # Iterate through each data point (ZA and timestamp) for the current day
+        for i, current_value in enumerate(dailyPosition):
+            current_za = current_value['ZA']
+            current_time = current_value['T']
+
+            # Identify the overall highest and deepest ZA points for the day
+            if not deepest_point or current_za < deepest_point:
+                deepest_point = current_za
+                deepest_time = current_time
+                # Reset highest point if a new deepest point is found (implies a new trend segment)
+                highest_point = None
+                highest_time = None
+            if not highest_point or current_za > highest_point:
+                highest_point = current_za
+                highest_time = current_time
+
+            # Logic to identify cycles based on ZA changes (this is complex state-based logic)
+            # This section attempts to define a "cycle" by looking for patterns of ZA decreasing then increasing.
+            # Thresholds (e.g., 0.25, -0.1, -0.25, 0.1) define significant changes.
+
+            if not start_up_value and not start_down_value: # Initial state or after a cycle is completed
+                start_up_value = current_value # Assume an upward trend might start
+            elif not start_down_value and start_up_value and start_down_candidate and current_value['ZA'] - start_down_candidate['ZA'] > 0.25:
+                # Confirmed downward trend start after an upward phase
+                start_down_value = start_down_candidate
+                start_up_value = None # Reset start_up_value, looking for end of downward trend
+                start_down_candidate = None
+            elif not start_down_value and not start_down_candidate and start_up_value and current_value['ZA'] - prev_value['ZA'] > 0:
+                # Potential start of a downward trend (ZA increased then previous was lower)
+                if prev_value: # Ensure prev_value exists
+                     start_down_candidate = prev_value
+            elif not start_down_value and start_down_candidate and start_up_value and current_value['ZA'] - start_down_candidate['ZA'] < -0.1:
+                # Downward candidate invalidated, ZA not decreasing enough from candidate
+                start_down_candidate = None
+            elif start_down_value and start_up_candidate and not start_up_value and current_value['ZA'] > start_down_value['ZA'] and current_value['ZA'] - start_up_candidate['ZA'] < -0.25:
+                # Confirmed upward trend start after a downward phase (cycle completed)
+                start_up_value = start_up_candidate
+                abrupt_movements.append({
+                                        'start_value': start_down_value['ZA'],
+                                        'start_time': start_down_value['T'],
+                                        'end_value': start_up_value['ZA'],
+                                        'end_time': start_up_value['T']
+                                        })
+                # Reset for next cycle detection
+                start_up_candidate = None
+                start_down_value = None
+            elif start_down_value and start_up_candidate and not start_up_value and current_value['ZA'] < start_down_value['ZA'] and current_value['ZA'] - start_up_candidate['ZA'] < -0.25:
+                start_down_value = None
+                start_up_value = start_up_candidate
+                start_up_candidate = None
+            elif start_down_value and not start_up_value and not start_up_candidate  and current_value['ZA'] - prev_value['ZA'] < 0:
+                # Potential start of an upward trend (ZA decreased then previous was higher)
+                if prev_value: # Ensure prev_value exists
+                    start_up_candidate = prev_value
+            elif start_down_value and start_up_candidate and not start_up_value and current_value['ZA'] - start_up_candidate['ZA'] > 0.1:
+                # Upward candidate invalidated, ZA not increasing enough from candidate
+                start_up_candidate = None
+
+            prev_value = current_value # Update previous value for the next iteration
+
+        # Handle a potential incomplete cycle at the end of the data
+        if start_down_value and start_up_candidate:
+            abrupt_movements.append({
+                                        'start_value': start_down_value['ZA'],
+                                        'start_time': start_down_value['T'],
+                                        'end_value': start_up_candidate['ZA'], # Use candidate as end
+                                        'end_time': start_up_candidate['T']
+                                    })
+        elif start_down_value:
+            abrupt_movements.append({
+                                        'start_value': start_down_value['ZA'],
+                                        'start_time': start_down_value['T'],
+                                        'end_value': prev_value['ZA'], # Use prev value as end
+                                        'end_time': prev_value['T']
+                                    })
+
+
+        # Ensure the overall largest daily fluctuation (deepest to highest) is included as a movement
+        if highest_point and deepest_point:
+            element = {
+                'start_value': deepest_point,
+                'start_time': deepest_time,
+                'end_value': highest_point,
+                'end_time': highest_time
+            }
+            if element not in abrupt_movements: # Avoid duplicating if already identified
+                 abrupt_movements.append(element)
+            else:
+                 print("Avoided duplicated general value (overall daily max-min)")
+
+        # --- Damage Calculation ---
+        def process_movement(element, grouped_values):
+            """
+            Processes a single abrupt movement to calculate its contribution to damage.
+            Converts ZA change to stress and counts occurrences of each stress level.
+            """
+            start_value = element['start_value'] # ZA at the start of the movement
+            end_value = element['end_value'] # ZA at the end of the movement
+            start_stress = None
+            end_stress = None
+            stress_value = None
+
+            # Check if ZA values are within a plausible range (0-100 degrees)
+            if start_value < 100 and end_value < 100 and start_value >= 0 and end_value >= 0:
+                # Query the conversion table to find MPa stress corresponding to rounded ZA degrees
+                matching_row_start = conversion.query(f"Degree == {round(start_value)}")
+                matching_row_end = conversion.query(f"Degree == {round(end_value)}")
+
+                # Safely get the MPa value if a match was found
+                if not matching_row_start.empty:
+                    start_stress = round(matching_row_start.iloc[0]["MPa"])
+                if not matching_row_end.empty:
+                    end_stress = round(matching_row_end.iloc[0]["MPa"])
+
+                # If both start and end stresses are found, calculate the stress amplitude
+                if start_stress is not None and end_stress is not None:
+                    stress_value = abs(start_stress - end_stress) # Stress amplitude of the cycle
+                    if stress_value > 0:
+                        # Group by stress value and count occurrences (cycles at that stress level)
+                        if str(stress_value) in grouped_values:
+                            grouped_values[str(stress_value)] += 1
+                        else:
+                            grouped_values[str(stress_value)] = 1
+
+        grouped_values = {} # Dictionary to store stress amplitudes and their counts
+        accumulated_damage_today = 0 # Initialize damage for the current day
+
+        # Process each identified abrupt movement to populate grouped_values
+        for element in abrupt_movements:
+            process_movement(element, grouped_values)
+
+        # Calculate Miner's rule damage for the current day
+        for stress_amplitude_str, num_cycles_at_stress in grouped_values.items():
+            rounded_stress = round(float(stress_amplitude_str), 2) # Convert stress key to float
+            # Estimate max cycles to failure at this stress level using the S-N curve
+            max_cycles_to_failure = estimate_cycles(rounded_stress)
+            # Add the damage fraction (actual cycles / cycles to failure)
+            if max_cycles_to_failure > 0: # Avoid division by zero
+                accumulated_damage_today += num_cycles_at_stress / max_cycles_to_failure
+        date = datetime.strptime(date, "%Y-%m-%d")
+        total_cycles_today = sum(grouped_values.values())
+        damage_dict = {'T': date, 'DMG': accumulated_damage_today, 'CYCLES':total_cycles_today}
+        print("This is the damage: ", damage_dict)
+        MongoDb.storeDamage(MongoDb, damage_dict)
+    except Exception:
+        pass
+
 #Function that recieves all the Log File names and 
 def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0):
-    dirname = "./DriveMonitoringApp/DataStorage/static/html/Log_" + filename
+    dirname = "/fefs/onsite/data/R1/LSTN-01/lst-drive/DMonitoring/static/html/Log_" + filename
     print("This is the no check script running for the date: "+date)
     generallog.clear()
     firstData = date
@@ -495,10 +682,17 @@ def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0
                 checkDatev2(gotocmd,gotobeg,gotoend,gotoerror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/GoToPos"+"/GoToPos",generalTypes[selectedType],0,"GoToPsition")
     else:
         print("There is no general data or there was an error")
-    getLoadPin(filename3)
+    try:
+        calculateDamage(date)
+    except Exception as e:
+        print("Could not store the Damage: "+str(e))
+    try:
+        getLoadPin(filename3)
+    except Exception as e:
+        print("Could not store Load Pins: "+str(e))
     try: 
         if firstData is not None:
-            req = requests.post(IP+"storage/plotGeneration", json=[[firstData]])
+            req = requests.post(IP+"/storage/plotGeneration", json=[[firstData]])
     except Exception as e:
         print("Plot was not generated because there is no conection to Django or there was a problem: "+str(e))
     print("END TIME")

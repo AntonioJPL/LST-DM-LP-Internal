@@ -23,8 +23,14 @@ import numpy as np
 import requests
 import asyncio
 from mongo_utils import MongoDb
-from IP_Info import IP
+#from IP_Info import IP
+from dotenv import load_dotenv
+
+
 #General
+load_dotenv()  # take environment variables from .env
+IP = os.environ.get('EXT_SERVER_IP')
+
 operationTimes = []
 generallog = []
 generalData = []
@@ -438,7 +444,7 @@ def storeLogsAndOperation(logsorted):
         print("Logs could not be stored: "+str(e))
 #Function that recieves all the Log File names and calls other functions to store the data and generate the interactive plots
 def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0):
-    dirname = "./DriveMonitoringApp/DataStorage/static/html/Log_" + filename
+    dirname = "/fefs/onsite/data/R1/LSTN-01/lst-drive/DMonitoring/static/html/Log_" + filename
     print("This is the Hot plots script running for the date: "+date)
     generallog.clear()
     firstData = date
@@ -498,7 +504,7 @@ def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0
     getLoadPin(filename3)
     try: 
         if firstData is not None:
-            req = requests.post(IP+"storage/hotPlotGeneration", json=[[firstData]])
+            req = requests.post(IP+"/storage/hotPlotGeneration", json=[[firstData]])
     except Exception as e:
         print("Plot was not generated because there is no conection to Django or there was a problem: "+str(e))
     print("END TIME")

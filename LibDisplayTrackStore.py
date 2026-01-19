@@ -1,4 +1,3 @@
-import numpy as np
 from datetime import datetime,timedelta,date,timedelta
 import time as time
 from time import strftime
@@ -12,8 +11,16 @@ import numpy as np
 import requests
 import asyncio
 from mongo_utils import MongoDb
-from IP_Info import IP
+#from IP_Info import IP
+from dotenv import load_dotenv
+from pytz import UTC
+from scipy.optimize import curve_fit
+
+
 #General
+load_dotenv()  # take environment variables from .env
+
+IP = os.environ.get('EXT_SERVER_IP')
 operationTimes = []
 generallog = []
 generalData = []
@@ -24,6 +31,8 @@ generalTypes = {
     "4" : "GoToPos"
 }
 selectedType = 0
+newLPs = False
+dailyPosition = []
 #Used on GetAllDate function, normally recieves the filename variable and a string containing the text we are searching. Returns xbeg value
 def getDate(filename,cmdstring):
     f = open(filename, "r") 
@@ -34,14 +43,20 @@ def getDate(filename,cmdstring):
             val =line.split(' ')
             #These are ANSI color codes being removed
             stringtime = val[0].replace("\x1b[32;1m","").replace("\x1b[m","").replace("\x1b[35;1m","").replace("\x1b[31;1m","")+ " " + val[1]
-            stringtime = stringtime + ""
-            begtime = datetime.strptime(stringtime,'%d/%m/%y %H:%M:%S')
-            # add proper timezone
-            pst = pytz.timezone('UTC')
-            begtime = pst.localize(begtime)
-            begtimes = begtime.timestamp()
-            xbeg.append(begtimes)
-            generallog.append([begtime,cmdstring])
+            if stringtime[0].isdigit():
+                stringtime = stringtime + ""
+            else:
+                stringtime = val[3].replace('Zd=', '' )+" "+val[4]
+            try:
+                begtime = datetime.strptime(stringtime,'%d/%m/%y %H:%M:%S')
+                # add proper timezone
+                pst = pytz.timezone('UTC')
+                begtime = pst.localize(begtime)
+                begtimes = begtime.timestamp()
+                xbeg.append(begtimes)
+                generallog.append([begtime,cmdstring])
+            except Exception:
+               continue
     return xbeg
 #Used in getAllDate function, recieves the filename and a string containing the text we are searching. Returns 3 values: ra, dec and radetime
 def getRADec(filename,cmdstring):
@@ -54,17 +69,20 @@ def getRADec(filename,cmdstring):
             val =line.split(' ')
             stringtime = val[0].replace("\x1b[32;1m","").replace("\x1b[m","").replace("\x1b[35;1m","").replace("\x1b[31;1m","")+ " " + val[1]
             stringtime = stringtime + ""
-            begtime = datetime.strptime(stringtime,'%d/%m/%y %H:%M:%S')
-            # add proper timezone
-            pst = pytz.timezone('UTC')
-            begtime = pst.localize(begtime)
-            begtimes = begtime.timestamp()
-            radectime.append(begtimes)
-            for vali in val:
-                if vali.find("RA=") != -1:
-                    ra.append(float(vali[(vali.find('=')+1):(vali.find('['))])) #Gets the string value between the position 3 and 10 (RA value) and parses it into a float
-                if vali.find("Dec=") != -1:
-                    dec.append(float(vali[(vali.find('=')+1):(vali.find('['))]))
+            try:
+                begtime = datetime.strptime(stringtime,'%d/%m/%y %H:%M:%S')
+                # add proper timezone
+                pst = pytz.timezone('UTC')
+                begtime = pst.localize(begtime)
+                begtimes = begtime.timestamp()
+                radectime.append(begtimes)
+                for vali in val:
+                    if vali.find("RA=") != -1:
+                        ra.append(float(vali[(vali.find('=')+1):(vali.find('['))])) #Gets the string value between the position 3 and 10 (RA value) and parses it into a float
+                    if vali.find("Dec=") != -1:
+                        dec.append(float(vali[(vali.find('=')+1):(vali.find('['))]))
+            except Exception:
+                continue
     return ra,dec,radectime
 #Used in getAllDate function, recieves the filename and a string containing the text we are searching. Returns xbeg value val is teh array of strings in the found line. It works as getDate but the string structure is different so it needs to be treated in other way
 def getDateTrack(filename,cmdstring):
@@ -77,11 +95,14 @@ def getDateTrack(filename,cmdstring):
             #print(val)
             stringtime = val[6] + " " + val[7]
             stringtime = stringtime + ""
-            begtime = datetime.strptime(stringtime,'%Y-%m-%d %H:%M:%S')
-            pst = pytz.timezone('UTC')
-            begtime = pst.localize(begtime)
-            begtimes = begtime.timestamp()
-            xbeg.append(begtimes)
+            try:
+                begtime = datetime.strptime(stringtime,'%Y-%m-%d %H:%M:%S')
+                pst = pytz.timezone('UTC')
+                begtime = pst.localize(begtime)
+                begtimes = begtime.timestamp()
+                xbeg.append(begtimes)
+            except Exception:
+                continue
     return xbeg
 #Used in GenerateFig function. Returns df value which is a pandas.DataFrame Object containing the date, ra, dec between the given tmin and tmax values in the DrivePosition file 
 def getPos(filename,tmin,tmax):    
@@ -103,6 +124,7 @@ def getPos(filename,tmin,tmax):
     df['T'] = df['T'] + maskT1*-2 + maskT2*-2 
     df['T'] = df['T'].apply(lambda d: datetime.fromtimestamp(d, tz=pytz.utc))
     df_dict = df.to_dict('records')
+    dailyPosition.extend(df_dict)
     for rows in df_dict:
         rows["T"] = str(rows["T"].timestamp()).replace(".", "")
         rows["T"] = int(rows["T"].ljust(2+len(rows["T"]), '0'))
@@ -162,14 +184,17 @@ def getDateAndLine(filename,cmdstring):
             val =line.split(' ')
             stringtime = val[0].replace("\x1b[32;1m","").replace("\x1b[m","").replace("\x1b[35;1m","").replace("\x1b[31;1m","")+ " " + val[1]
             stringtime = stringtime + ""
-            begtime = datetime.strptime(stringtime,'%d/%m/%y %H:%M:%S')
-            # add proper timezone
-            pst = pytz.timezone('UTC')
-            begtime = pst.localize(begtime)
-            begtimes = begtime.timestamp()
-            xbeg.append(begtimes)
-            lineout.append(line)
-            print("Found %s %s %s"%(cmdstring,begtime,begtimes))
+            try:
+                begtime = datetime.strptime(stringtime,'%d/%m/%y %H:%M:%S')
+                # add proper timezone
+                pst = pytz.timezone('UTC')
+                begtime = pst.localize(begtime)
+                begtimes = begtime.timestamp()
+                xbeg.append(begtimes)
+                lineout.append(line)
+                print("Found %s %s %s"%(cmdstring,begtime,begtimes))
+            except Exception:
+                continue
     return xbeg,lineout
 def getTorqueNew(filename,tmin,tmax):    
     df = pd.read_csv(filename,sep=' ',header=None)
@@ -218,7 +243,11 @@ def getLoadPin(filename2):
     t0=datetime(1970,1,1)
     pst = pytz.timezone('UTC')
     t0 = pst.localize(t0)
-    f2 = open(filename2, "r")
+    try:
+        f2 = open(filename2, "r")
+    except:
+        print('Error opening the file')
+        return None
     lp=0
     lpval=0
     values = 0
@@ -226,16 +255,21 @@ def getLoadPin(filename2):
     lines = f2.readlines()
     for line in lines:
         val=line.split(' ')
-        dval = int(val[0])
-        lp=int(val[1])
-        for v in range(2,len(val)):
-            values += 1
-            dvalinc = int(dval) + (v-2)*0.1
-            lpval=int(val[v].replace("\n",""))
-            pins.append({'T':str(dvalinc),'LoadPin':lp,'Load':lpval})
+        if val[0] != '\n':
+            dval = int(val[0])
+            lp=int(val[1])
+            for v in range(2,len(val)):
+                values += 1
+                dvalinc = int(dval) + (v-2)*0.1
+                lpval=int(val[v].replace("\n",""))
+                pins.append({'T':str(dvalinc),'LoadPin':lp,'Load':lpval})
     print("Storing the data")
     print(values)
-    MongoDb.storeLoadPin(MongoDb, pins)
+    lastTValue = MongoDb.getLastLoadPin(MongoDb, pins[len(pins)-1]["T"])
+    if lastTValue is not False and pins:
+        if pins[len(pins)-1]["T"] != lastTValue["lastLP"]:
+            newLPs = True      
+            MongoDb.storeLoadPin(MongoDb, pins)
 #Used in checkDatev2. Recieves the data from checkdate function, parses it once more and then stores this data into mongodb
 def GenerateFig(filename,filename2,filename3,filename4,tmin,tmax,cmd_status,ttrack,figname="",type=None,addtext='',ra=None,dec=None):
     print("GenerateFig %s %s %s %s %s %s %s "%(filename,filename2,filename3,tmin,tmax,ttrack,figname))
@@ -367,13 +401,13 @@ def checkDatev2(cmd,beg,end,error,stop,track,repos,filename,filename2,filename3,
                 tmax = tmax
             GenerateFig(filename,filename2,filename3,filename4,tmin,tmax,cmd_status[-1],trackok2,figname.replace(" ",""),type,addtext,raok2,decok2)
 #Stores the logs and the opreation into mongodb
-def storeLogsAndOperation(logsorted):
+def storeLogsAndOperation(logsorted, date):
     try: 
         logs = []
         data = {}
         operationTmin = None
         operationTmax = datetime.timestamp(logsorted[len(logsorted)-1][0])
-        operationDate = logsorted[0][0].strftime("%Y-%m-%d")
+        operationDate = date
         commandPosition = None
         for i in range(0,len(logsorted)):
             if logsorted[i][1].find("action error")!= -1 and commandPosition != None :
@@ -425,32 +459,232 @@ def storeLogsAndOperation(logsorted):
             operationTimes.append(operationTmax)
     except Exception as e:
         print("Logs could not be stored: "+str(e))
+#Function that stores the Damage
+def calculateDamage(date):
+    try:
+        # --- S-N Curve Configuration (Stress-Number of Cycles) ---
+        # Define known stress points and corresponding number of cycles to failure
+        stress = np.array([292, 136, 63, 50, 37, 32, 20]) # Stress values in MPa
+        cycles = np.array([1e4, 1e5, 1e6, 2e6, 5e6, 1e7, 1e8]) # Number of cycles
+
+        # Define the S-N curve function (Basquin's equation form)
+        def sn_curve(N, a, b):
+            """
+            Calculates stress (S) given number of cycles (N) based on S = a * N^(-b).
+            Clips N to avoid issues with very low or very high cycle counts.
+            """
+            N = np.clip(N, 1e3, 1e12) # Clip N to a practical range
+            return a * N**(-b)
+
+        # Fit the S-N curve function to the experimental data to find parameters 'a' and 'b'
+        params, _ = curve_fit(sn_curve, cycles, stress)
+        a, b = params # Unpack the fitted parameters
+        # Define helper functions based on the fitted S-N curve
+        def estimate_cycles(stress_input):
+            """Estimates the number of cycles to failure for a given stress input."""
+            return (stress_input / a) ** (-1 / b)
+        print("Calculating Damages...")
+        # Prepare data for plotting and analysis
+        datetime_objects = [datetime.fromtimestamp(item['T'] / 1000, tz=UTC) for item in dailyPosition] # Convert timestamps to datetime objects
+        za_values = [item['ZA'] for item in dailyPosition] # Extract Zenith Angle values
+        conversion = pd.read_csv('./deg_to_stress.csv')
+        # --- Abrupt Movement Identification Logic ---
+        # Initialize variables for detecting significant changes (cycles) in Zenith Angle
+        abrupt_movements = [] # List to store identified abrupt movements
+        prev_value = None # Stores the previous data point {ZA, T}
+        # Variables for identifying start and end points of a potential cycle
+        start_down_value = None # Marks the start of a downward ZA trend (potential cycle start)
+        start_up_value = None   # Marks the start of an upward ZA trend (potential cycle end)
+        deepest_point = None    # Tracks the minimum ZA value in the current segment
+        deepest_time = None     # Timestamp of the deepest_point
+        highest_point = None    # Tracks the maximum ZA value in the current segment
+        highest_time = None     # Timestamp of the highest_point
+        # Candidate points for cycle boundaries, refined as data is processed
+        start_down_candidate = None
+        start_up_candidate = None
+
+        # Iterate through each data point (ZA and timestamp) for the current day
+        for i, current_value in enumerate(dailyPosition):
+            current_za = current_value['ZA']
+            current_time = current_value['T']
+
+            # Identify the overall highest and deepest ZA points for the day
+            if not deepest_point or current_za < deepest_point:
+                deepest_point = current_za
+                deepest_time = current_time
+                # Reset highest point if a new deepest point is found (implies a new trend segment)
+                highest_point = None
+                highest_time = None
+            if not highest_point or current_za > highest_point:
+                highest_point = current_za
+                highest_time = current_time
+
+            # Logic to identify cycles based on ZA changes (this is complex state-based logic)
+            # This section attempts to define a "cycle" by looking for patterns of ZA decreasing then increasing.
+            # Thresholds (e.g., 0.25, -0.1, -0.25, 0.1) define significant changes.
+
+            if not start_up_value and not start_down_value: # Initial state or after a cycle is completed
+                start_up_value = current_value # Assume an upward trend might start
+            elif not start_down_value and start_up_value and start_down_candidate and current_value['ZA'] - start_down_candidate['ZA'] > 0.25:
+                # Confirmed downward trend start after an upward phase
+                start_down_value = start_down_candidate
+                start_up_value = None # Reset start_up_value, looking for end of downward trend
+                start_down_candidate = None
+            elif not start_down_value and not start_down_candidate and start_up_value and current_value['ZA'] - prev_value['ZA'] > 0:
+                # Potential start of a downward trend (ZA increased then previous was lower)
+                if prev_value: # Ensure prev_value exists
+                     start_down_candidate = prev_value
+            elif not start_down_value and start_down_candidate and start_up_value and current_value['ZA'] - start_down_candidate['ZA'] < -0.1:
+                # Downward candidate invalidated, ZA not decreasing enough from candidate
+                start_down_candidate = None
+            elif start_down_value and start_up_candidate and not start_up_value and current_value['ZA'] > start_down_value['ZA'] and current_value['ZA'] - start_up_candidate['ZA'] < -0.25:
+                # Confirmed upward trend start after a downward phase (cycle completed)
+                start_up_value = start_up_candidate
+                abrupt_movements.append({
+                                        'start_value': start_down_value['ZA'],
+                                        'start_time': start_down_value['T'],
+                                        'end_value': start_up_value['ZA'],
+                                        'end_time': start_up_value['T']
+                                        })
+                # Reset for next cycle detection
+                start_up_candidate = None
+                start_down_value = None
+            elif start_down_value and start_up_candidate and not start_up_value and current_value['ZA'] < start_down_value['ZA'] and current_value['ZA'] - start_up_candidate['ZA'] < -0.25:
+                start_down_value = None
+                start_up_value = start_up_candidate
+                start_up_candidate = None
+            elif start_down_value and not start_up_value and not start_up_candidate  and current_value['ZA'] - prev_value['ZA'] < 0:
+                # Potential start of an upward trend (ZA decreased then previous was higher)
+                if prev_value: # Ensure prev_value exists
+                    start_up_candidate = prev_value
+            elif start_down_value and start_up_candidate and not start_up_value and current_value['ZA'] - start_up_candidate['ZA'] > 0.1:
+                # Upward candidate invalidated, ZA not increasing enough from candidate
+                start_up_candidate = None
+
+            prev_value = current_value # Update previous value for the next iteration
+
+        # Handle a potential incomplete cycle at the end of the data
+        if start_down_value and start_up_candidate:
+            abrupt_movements.append({
+                                        'start_value': start_down_value['ZA'],
+                                        'start_time': start_down_value['T'],
+                                        'end_value': start_up_candidate['ZA'], # Use candidate as end
+                                        'end_time': start_up_candidate['T']
+                                    })
+        elif start_down_value:
+            abrupt_movements.append({
+                                        'start_value': start_down_value['ZA'],
+                                        'start_time': start_down_value['T'],
+                                        'end_value': prev_value['ZA'], # Use prev value as end
+                                        'end_time': prev_value['T']
+                                    })
+
+
+        # Ensure the overall largest daily fluctuation (deepest to highest) is included as a movement
+        if highest_point and deepest_point:
+            element = {
+                'start_value': deepest_point,
+                'start_time': deepest_time,
+                'end_value': highest_point,
+                'end_time': highest_time
+            }
+            if element not in abrupt_movements: # Avoid duplicating if already identified
+                 abrupt_movements.append(element)
+            else:
+                 print("Avoided duplicated general value (overall daily max-min)")
+
+        # --- Damage Calculation ---
+        def process_movement(element, grouped_values):
+            """
+            Processes a single abrupt movement to calculate its contribution to damage.
+            Converts ZA change to stress and counts occurrences of each stress level.
+            """
+            start_value = element['start_value'] # ZA at the start of the movement
+            end_value = element['end_value'] # ZA at the end of the movement
+            start_stress = None
+            end_stress = None
+            stress_value = None
+
+            # Check if ZA values are within a plausible range (0-100 degrees)
+            if start_value < 100 and end_value < 100 and start_value >= 0 and end_value >= 0:
+                # Query the conversion table to find MPa stress corresponding to rounded ZA degrees
+                matching_row_start = conversion.query(f"Degree == {round(start_value)}")
+                matching_row_end = conversion.query(f"Degree == {round(end_value)}")
+
+                # Safely get the MPa value if a match was found
+                if not matching_row_start.empty:
+                    start_stress = round(matching_row_start.iloc[0]["MPa"])
+                if not matching_row_end.empty:
+                    end_stress = round(matching_row_end.iloc[0]["MPa"])
+
+                # If both start and end stresses are found, calculate the stress amplitude
+                if start_stress is not None and end_stress is not None:
+                    stress_value = abs(start_stress - end_stress) # Stress amplitude of the cycle
+                    if stress_value > 0:
+                        # Group by stress value and count occurrences (cycles at that stress level)
+                        if str(stress_value) in grouped_values:
+                            grouped_values[str(stress_value)] += 1
+                        else:
+                            grouped_values[str(stress_value)] = 1
+
+        grouped_values = {} # Dictionary to store stress amplitudes and their counts
+        accumulated_damage_today = 0 # Initialize damage for the current day
+
+        # Process each identified abrupt movement to populate grouped_values
+        for element in abrupt_movements:
+            process_movement(element, grouped_values)
+
+        # Calculate Miner's rule damage for the current day
+        for stress_amplitude_str, num_cycles_at_stress in grouped_values.items():
+            rounded_stress = round(float(stress_amplitude_str), 2) # Convert stress key to float
+            # Estimate max cycles to failure at this stress level using the S-N curve
+            max_cycles_to_failure = estimate_cycles(rounded_stress)
+            # Add the damage fraction (actual cycles / cycles to failure)
+            if max_cycles_to_failure > 0: # Avoid division by zero
+                accumulated_damage_today += num_cycles_at_stress / max_cycles_to_failure
+        date = datetime.strptime(date, "%Y-%m-%d")
+        total_cycles_today = sum(grouped_values.values())
+        damage_dict = {'T': date, 'DMG': accumulated_damage_today, 'CYCLES':total_cycles_today}
+        print("This is the damage: ", damage_dict)
+        MongoDb.storeDamage(MongoDb, damage_dict)
+    except Exception:
+        pass
+
 #Function that recieves all the Log File names and calls other functions to store the data and generate the interactive plots
 def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0):
-    dirname = "./DriveMonitoringApp/DataStorage/static/html/Log_" + filename
+    dirname = "/fefs/onsite/data/R1/LSTN-01/lst-drive/DMonitoring/static/html/Log_" + filename
     if len(MongoDb.dbname.list_collection_names()) == 0:
         MongoDb.__init__(MongoDb)
     generallog.clear()
     f = open(filename, 'r')
     #This is the automatized check on the plots being generated a week before the executed date
     firstData = date
-    if len(f.readlines()) > 0:
+    print(firstData)
+    print("This is the length of the lines:")
+    lines = f.readlines()
+    print(len(lines))
+    if len(lines) > 0:
         dirCopy = dirname
-        checkPlots(dirCopy, filename, date)
+        try:
+            checkPlots(dirCopy, filename, date)
+        except Exception as e:
+            print("There was an error: %s", repr(e))
         lastDate = None
         actualDate = date
+        print(actualDate)
         actualDate = actualDate.replace("-", "/")
         try:
             req = MongoDb.checkDates(MongoDb, firstData)
             lastDate = req["lastDate"]
+            print(lastDate)
         except Exception as e: 
             print("Could not check if data is up to date. Storing actual date... %s", repr(e))
             lastDate = None
+        lastDate = True
         if lastDate is not True and lastDate is not None and lastDate is not False:
-            print("---------- The System is not up to date. Last data date on MongoDB: "+lastDate+" -----------")
-            print("Running missing days ...")
             dateFormat = ("%Y/%m/%d")
             if lastDate == "Empty":
+                print("---------- The Database is empty -----------")
                 lastDate = str(actualDate)[0:-2]+"01"
                 parsedLastDBDate = datetime.strptime(lastDate, dateFormat)-timedelta(days=1)
                 parsedActualDate = datetime.strptime(actualDate, dateFormat)
@@ -459,7 +693,10 @@ def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0
                     asyncio.run(runFile(parsedLastDBDate.strftime(dateFormat)))
             else:
                 lastDate = lastDate.replace("-", "/")
-                if lastDate < actualDate : 
+                if lastDate < actualDate :
+                    print(actualDate)
+                    print("---------- The System is not up to date. Last data date on MongoDB: "+lastDate+" -----------")
+                    print("Running missing days ...") 
                     parsedLastDBDate = datetime.strptime(lastDate, dateFormat)
                     parsedActualDate = datetime.strptime(actualDate, dateFormat)
                     while parsedLastDBDate < (parsedActualDate-timedelta(days=1)):
@@ -467,64 +704,81 @@ def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0
                         asyncio.run(runFile(parsedLastDBDate.strftime(dateFormat)))
     else:
         print("There is no SentinelleOPCUA log file. Up to date check cant be done, storing and generating Load Pin information/Plots")
-    #Genereal
-    generalstop = getDate(filename,"StopDrive command sent")
-    trackcmdinitiale = getDate(filename,"Start Tracking")
-    gotocmdinitiale = getDate(filename,"GoToPosition") 
-    #Param regulation
-    azparam,azparamline = getDateAndLine(filename,"Drive Regulation Parameters Azimuth")    #This prints the found msg in console
-    elparam,elparamline = getDateAndLine(filename,"Drive Regulation Parameters Elevation")  #This prints the found msg in console
-    #Tracking
-    trackcmd = getDate(filename,"Start_Tracking command sent")
-    trackbeg = getDate(filename,"Start_Tracking in progress")
-    trackend = getDate(filename,"Start_Tracking Done received")
-    trackerror = getDate(filename,"Start_Tracking action error")
-    track = getDateTrack(filename,"[Drive] Track start")
-    ra,dec,radectime = getRADec(filename,"Start Tracking")
-    #Parkout
-    parkoutcmd = getDate(filename,"Park_Out command sent")
-    parkoutbeg = getDate(filename,"Park_Out in progress")
-    parkoutend = getDate(filename,"Park_Out Done received")
-    parkouterror = getDate(filename,"Park_Out action error")
-    #Parkin
-    parkincmd = getDate(filename,"Park_In command sent")
-    parkinbeg = getDate(filename,"Park_In in progress")
-    parkinend = getDate(filename,"Park_In Done received")
-    parkinerror = getDate(filename,"Park_In action error")
-    #GoToTelPos
-    gotocmd = getDate(filename,"GoToTelescopePosition command sent")
-    gotobeg = getDate(filename,"GoToTelescopePosition in progress")
-    gotoend = getDate(filename,"GoToTelescopePosition Done received")
-    gotoerror = getDate(filename,"GoToTelescopePosition action error")
-    generallogsorted =sorted(generallog, key=itemgetter(0)) #Orders generallog by date as position 0 contains begdate value
-    print("START TIME")
-    print(datetime.now().strftime("%H:%M:%S"))
-    storeLogsAndOperation(generallogsorted)
-    print(len(operationTimes))
-    if len(operationTimes) > 0:
-        if len(trackbeg) != 0:
-            print("====== Track =======")
-            selectedType = "1"
-            checkDatev2(trackcmd,trackbeg,trackend,trackerror,generalstop,track,None,filename2,filename3,filename4,filename5,dirname+"/Track"+"/Track",generalTypes[selectedType],0,"Tracking",lastone,azparam,azparamline,elparam,elparamline,ra,dec)
-        if lastone ==0 :
-            if len(parkoutbeg) != 0:
-                print("====== Parkout =======")
-                selectedType = "2"
-                checkDatev2(parkoutcmd,parkoutbeg,parkoutend,parkouterror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/Parkout"+"/Parkout",generalTypes[selectedType],0,"ParkOut")
-            if len(parkinbeg) != 0:
-                print("====== Parkin =======")
-                selectedType = "3"
-                checkDatev2(parkincmd,parkinbeg,parkinend,parkinerror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/Parkin"+"/Parkin",generalTypes[selectedType],1,"ParkIn")
-            if len(gotobeg) != 0:
-                print("====== GoToPos =======")
-                selectedType = "4"
-                checkDatev2(gotocmd,gotobeg,gotoend,gotoerror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/GoToPos"+"/GoToPos",generalTypes[selectedType],0,"GoToPsition")
-    else:
-        print("There is no general data or there was an error")
-    getLoadPin(filename3)
+    try:
+        #Genereal
+        generalstop = getDate(filename,"StopDrive command sent")
+        trackcmdinitiale = getDate(filename,"Start Tracking")
+        gotocmdinitiale = getDate(filename,"GoToPosition") 
+        print("General information gathered")
+        #Param regulation
+        azparam,azparamline = getDateAndLine(filename,"Drive Regulation Parameters Azimuth")    #This prints the found msg in console
+        elparam,elparamline = getDateAndLine(filename,"Drive Regulation Parameters Elevation")  #This prints the found msg in console
+        print("Elevation and Azimuth parameters gathered")
+        #Tracking
+        trackcmd = getDate(filename,"Start_Tracking command sent")
+        trackbeg = getDate(filename,"Start_Tracking in progress")
+        trackend = getDate(filename,"Start_Tracking Done received")
+        trackerror = getDate(filename,"Start_Tracking action error")
+        track = getDateTrack(filename,"[Drive] Track start")
+        ra,dec,radectime = getRADec(filename,"Start Tracking")
+        print("Tracking information gathered")
+        #Parkout
+        parkoutcmd = getDate(filename,"Park_Out command sent")
+        parkoutbeg = getDate(filename,"Park_Out in progress")
+        parkoutend = getDate(filename,"Park_Out Done received")
+        parkouterror = getDate(filename,"Park_Out action error")
+        print("Parkout information gathered")
+        #Parkin
+        parkincmd = getDate(filename,"Park_In command sent")
+        parkinbeg = getDate(filename,"Park_In in progress")
+        parkinend = getDate(filename,"Park_In Done received")
+        parkinerror = getDate(filename,"Park_In action error")
+        print("Parkin information gathered")
+        #GoToTelPos
+        gotocmd = getDate(filename,"GoToTelescopePosition command sent")
+        gotobeg = getDate(filename,"GoToTelescopePosition in progress")
+        gotoend = getDate(filename,"GoToTelescopePosition Done received")
+        gotoerror = getDate(filename,"GoToTelescopePosition action error")
+        print("GoToPos information gathered")
+        generallogsorted =sorted(generallog, key=itemgetter(0)) #Orders generallog by date as position 0 contains begdate value
+        print("START TIME")
+        print(datetime.now().strftime("%H:%M:%S"))
+        storeLogsAndOperation(generallogsorted, date)
+        print(len(operationTimes))
+        if len(operationTimes) > 0:
+            if len(trackbeg) != 0:
+                print("====== Track =======")
+                selectedType = "1"
+                checkDatev2(trackcmd,trackbeg,trackend,trackerror,generalstop,track,None,filename2,filename3,filename4,filename5,dirname+"/Track"+"/Track",generalTypes[selectedType],0,"Tracking",lastone,azparam,azparamline,elparam,elparamline,ra,dec)
+            if lastone ==0 :
+                if len(parkoutbeg) != 0:
+                    print("====== Parkout =======")
+                    selectedType = "2"
+                    checkDatev2(parkoutcmd,parkoutbeg,parkoutend,parkouterror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/Parkout"+"/Parkout",generalTypes[selectedType],0,"ParkOut")
+                if len(parkinbeg) != 0:
+                    print("====== Parkin =======")
+                    selectedType = "3"
+                    checkDatev2(parkincmd,parkinbeg,parkinend,parkinerror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/Parkin"+"/Parkin",generalTypes[selectedType],1,"ParkIn")
+                if len(gotobeg) != 0:
+                    print("====== GoToPos =======")
+                    selectedType = "4"
+                    checkDatev2(gotocmd,gotobeg,gotoend,gotoerror,generalstop,None,None,filename2,filename3,filename4,filename5,dirname+"/GoToPos"+"/GoToPos",generalTypes[selectedType],0,"GoToPsition")
+        else:
+            print("There is no general data or there was an error")
+    except Exception as e:
+        print("There was an error: %s" % (str(e)))
+    try:
+        calculateDamage(date)
+    except Exception as e:
+        print("Could not store the Damage: "+str(e))
+    try:
+        getLoadPin(filename3)
+        pass
+    except Exception as e:
+        print("Could not store Load Pins: "+str(e))
     try: 
-        if firstData is not None:
-            req = requests.post(IP+"storage/plotGeneration", json=[[firstData]])
+        if firstData is not None: # and newLPs
+            req = requests.post(IP+"/storage/plotGeneration", json=[[firstData]])
     except Exception as e:
         print("Plot was not generated because there is no conection to Django or there was a problem: "+str(e))
     print("END TIME")
@@ -537,7 +791,7 @@ async def runFile(date):
 #Function to check if the plots are generated for the last 7 days
 def checkPlots(dirname, filename, date):
     try:
-        res = requests.post(IP+"storage/checkPlots", json={"date": date, "dirname": dirname})
+        res = requests.post(IP+"/storage/checkPlots", json={"date": date, "dirname": dirname})
         json_data = json.loads(res.text)
         parsedResponse = json_data["data"]
         if parsedResponse:

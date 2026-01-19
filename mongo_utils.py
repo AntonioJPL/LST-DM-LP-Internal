@@ -3,10 +3,9 @@ from bson.json_util import dumps, loads
 from bson import ObjectId
 import os
 import glob
-from datetime import datetime
+from datetime import datetime, timedelta
 import datetime as DT
 import pytz
-from django.contrib.staticfiles import finders
 
 #Class containing all the Database information and functions
 class MongoDb:
@@ -52,7 +51,14 @@ class MongoDb:
         if len(self.dbname["Operations"].index_information()) == 1:
             self.dbname["Operations"].create_index([('Date', pymongo.ASCENDING), ("Tmin", pymongo.ASCENDING), ("Tmax", pymongo.ASCENDING)], unique=True)
         try:
-            self.dbname["Operations"].insert_one(data)
+            foundElement = self.dbname["Operations"].find_one({"Date": data["Date"]})
+            if foundElement:
+                if data["Tmax"] > foundElement["Tmax"]:
+                    result =self.dbname['Operations'].update_one({"_id": foundElement["_id"]}, {"$set": {"Tmax": data["Tmax"]}})
+                    if result.modified_count > 0:
+                        print("Found an operation on this date and changed its end time.")
+            else:
+                self.dbname["Operations"].insert_one(data)
         except Exception:
             print("Duplicated Operation entry on Date: "+data["Date"])
     #Function that stores a log entry
@@ -146,17 +152,55 @@ class MongoDb:
         except Exception as e:
             #print("error: "+str(e))
             pass
+    #Function that stores a track entry
+    def storeDamage(self, data):
+        if len(self.dbname["Damage"].index_information()) == 1:
+            self.dbname["Damage"].create_index([('T', pymongo.ASCENDING)], unique=True)
+        try:
+            print("Received data: ", data)
+            self.dbname["Damage"].insert_one(data)
+        except Exception as e:
+            #print("error: "+str(e))
+            pass
+
     #Function that checks if the date passed is equal to the last date stored, in case it is it returns true, in case the database has no operations it returns Empty and in case the date is not equal it returns the last date stored, if there is an error it returns False. All of this is returned in an object with a "lastDate" attribute
     def checkDates(self, date):
         try:
-            lastElementFound = list(self.dbname["Operations"].aggregate([{"$sort": {"Date": -1}}, {"$limit": 1}]))
-        except Exception:
+            lastElementFound = list(self.dbname["Operations"].aggregate([{"$sort": {"Date": -1}}, {"$limit": 1}]))      
+            lastLoadPinFound = list(self.dbname["Load_Pin"].aggregate([{"$sort": {"T": -1}}, {"$limit": 1}]))
+            if len(lastElementFound) > 0 and len(lastLoadPinFound) > 0:
+                loadPTimestamp = lastLoadPinFound[0]['T']
+                lastLPDate = datetime.fromtimestamp(float(loadPTimestamp))
+                lastLPDate = lastLPDate - timedelta(days=1)
+                lastLPDate = lastLPDate.strftime('%Y-%m-%d')
+                if lastLPDate > lastElementFound[0]["Date"]:
+                    return {"lastDate": lastLPDate}
+        except Exception as e:
+            print(str(e))
             return {"lastDate": False}
         if len(lastElementFound) > 0:
             lastElementFound = lastElementFound[0]
         else:
-            return {"lastDate": "Empty"}
+            lastLoadPinFound = list(self.dbname["Load_Pin"].aggregate([{"$sort": {"T": -1}}, {"$limit": 1}]))
+            if len(lastLoadPinFound) > 0: 
+                loadPTimestamp = lastLoadPinFound[0]['T']
+                lastLPDate = datetime.fromtimestamp(float(loadPTimestamp))
+                lastLPDate = lastLPDate - timedelta(days=1)
+                lastLPDate = lastLPDate.strftime('%Y-%m-%d')
+                return {"lastDate": str(lastLPDate)}
+            else: 
+                return {"lastDate": "Empty"}
         if lastElementFound["Date"] == date:
             return {"lastDate": True}
         else:
             return {"lastDate": lastElementFound["Date"]}
+    #Function that returns the last LoadPin date
+    def getLastLoadPin(self, date):
+        lastLoadPinFound = list(self.dbname["Load_Pin"].aggregate([{"$match": {"T": date}}, {"$sort": {"T": -1}}, {"$limit": 1}]))
+        if len(lastLoadPinFound) == 0:
+            lastLoadPinFound = list(self.dbname["Load_Pin"].aggregate([{"$sort": {"T": -1}}, {"$limit": 1}]))
+        if len(lastLoadPinFound) > 0:
+            loadPTimestamp = lastLoadPinFound[0]['T']
+            return {"lastLP": loadPTimestamp}
+        else:
+            return {"lastLP": False}
