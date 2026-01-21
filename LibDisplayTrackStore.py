@@ -360,7 +360,7 @@ def checkDatev2(cmd,beg,end,error,stop,track,repos,filename,filename2,filename3,
             endname = datetime.fromtimestamp(end_ok[i], tz=pytz.utc)
             sbegname = begname.strftime("%Y%m%d_%Hh%Mm%Ss")
             sendname = endname.strftime("%Y%m%d_%Hh%Mm%Ss")
-            figname = "_%s_%s"%(sbegname,sendname) + ".html"
+            figname = "_%s_%s"%(sbegname,sendname) + ".json"
             figname = figpre + figname.replace(":","")
             trackok2 = trackok[i]
             if ra is not None:
@@ -383,7 +383,7 @@ def checkDatev2(cmd,beg,end,error,stop,track,repos,filename,filename2,filename3,
         endname = datetime.fromtimestamp(end_ok[-1], tz=pytz.utc)
         sbegname = begname.strftime("%Y%m%d_%Hh%Mm%Ss")
         sendname = endname.strftime("%Y%m%d_%Hh%Mm%Ss")
-        figname = "_%s_%s"%(sbegname,sendname) + ".html"
+        figname = "_%s_%s"%(sbegname,sendname) + ".json"
         figname = figpre + figname.replace(":","")
         trackok2 = trackok[-1]
         raok2 = raok[i]
@@ -652,7 +652,7 @@ def calculateDamage(date):
 
 #Function that recieves all the Log File names and calls other functions to store the data and generate the interactive plots
 def getAllDate(filename,filename2,filename3,filename4,filename5, date, lastone=0):
-    dirname = "/fefs/onsite/data/R1/LSTN-01/lst-drive/DMonitoring/static/html/Log_" + filename
+    dirname = "/fefs/onsite/data/R1/LSTN-01/lst-drive/DMonitoring/static/json/Log_" + filename
     if len(MongoDb.dbname.list_collection_names()) == 0:
         MongoDb.__init__(MongoDb)
     generallog.clear()

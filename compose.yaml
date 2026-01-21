@@ -5,7 +5,7 @@ services:
     hostname: "DM-mongo"  # custom host name to use for the service container
     container_name: "DM-mongodb" # specifies a custom container name
     command: ["--wiredTigerCacheSizeGB", "10"] #Limits the memoty usage to 10GB max
-    image: "mongo:4.2.1-bionic"  # image to start the container from. Same as TCU.
+    image: "mongo:latest"  # image to start the container from. Same as TCU.
     restart: unless-stopped  # restarts a container irrespective of the exit code but will stop restarting when the service is stopped or removed
     ports:  # Exposes container ports: host IP, host port and container port
       - '27005:27017'
